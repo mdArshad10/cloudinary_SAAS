@@ -14,26 +14,38 @@ cloudinary.config({
 
 interface CloudinaryUploadResult {
   public_id: string;
-  bytes:number;
+  bytes: number;
   duration?: number;
   [key: string]: any;
 }
 
 export async function POST(req: NextRequest, res: NextResponse) {
-  const { userId } = useAuth();
-  if (!userId) {
-    return NextResponse.json(
-      {
-        error: "unauthenticated ",
-      },
-      { status: 401 }
-    );
-  }
-
-
   try {
+    const { userId } = useAuth();
+    if (!userId) {
+      return NextResponse.json(
+        {
+          error: "unauthenticated ",
+        },
+        { status: 401 }
+      );
+    }
+
+    if (
+      !process.env.CLOUDINARY_CLOUD_NAME ||
+      !process.env.CLOUDINARY_API_KEY ||
+      !process.env.CLOUDINARY_API_SECRET_KEY
+    ) {
+      return NextResponse.json(
+        { error: "invalid cloudinary credentials" },
+        { status: 401 }
+      );
+    }
     const formData = await req.formData();
     const file = formData.get("file") as File | null;
+    const title = formData.get("title") as string;
+    const description = formData.get("description") as string;
+    const originalSize = formData.get("originalSize") as string;
     if (!file) {
       return NextResponse.json({ error: "file not found" }, { status: 400 });
     }
@@ -50,7 +62,9 @@ export async function POST(req: NextRequest, res: NextResponse) {
       (resolve, rejects) => {
         const uploadStream = cloudinary.uploader.upload_stream(
           {
-            folder: "next-cloudinary-upload",
+            resource_type: "video",
+            folder: "video-upload",
+            transformation: [{ quality: "auto", fetch_format: "mp4" }],
           },
           (error, result) => {
             if (error) rejects(error);
@@ -62,14 +76,27 @@ export async function POST(req: NextRequest, res: NextResponse) {
       }
     );
 
-    return NextResponse.json({ publicId: result.public_id }, { status: 200 });
+    const video = await prisma.video.create({
+      data: {
+        title,
+        description,
+        publicId: result.public_id,
+        originalSize,
+        compressedSize: String(result.bytes),
+        duration: result.duration || 0,
+      },
+    });
+
+    return NextResponse.json({ video }, { status: 200 });
   } catch (error) {
     console.log(error);
     return NextResponse.json(
       {
-        error: "upload image error",
+        error: "video upload error",
       },
       { status: 500 }
     );
+  } finally {
+    await prisma.$disconnect();
   }
 }
